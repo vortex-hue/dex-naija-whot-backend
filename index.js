@@ -167,4 +167,85 @@ io.on("connection", (socket) => {
         player: "one",
       };
 
-      r
+      rooms.push({
+        room_id,
+        players: [
+          {
+            storedId,
+            socketId: socket.id,
+            player: "one",
+          },
+        ],
+        playerOneState,
+      });
+
+      io.to(socket.id).emit("dispatch", {
+        type: "INITIALIZE_DECK",
+        payload: playerOneState,
+      });
+    }
+  });
+
+  socket.on("sendUpdatedState", (updatedState, room_id) => {
+    const playerOneState =
+      updatedState.player === "one" ? updatedState : reverseState(updatedState);
+    const playerTwoState = reverseState(playerOneState);
+    rooms = rooms.map((room) => {
+      if (room.room_id == room_id) {
+        return {
+          ...room,
+          playerOneState,
+        };
+      }
+      return room;
+    });
+
+    socket.broadcast.to(room_id).emit("dispatch", {
+      type: "UPDATE_STATE",
+      payload: {
+        playerOneState,
+        playerTwoState,
+      },
+    });
+  });
+
+  socket.on("game_over", (room_id) => {
+    rooms = rooms.filter((room) => room.room_id != room_id);
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`🔌 Client disconnected: ${socket.id}`);
+    // Find the room the player disconnected from
+    let currentRoom = rooms.find((room) =>
+      room.players.map((player) => player.socketId).includes(socket.id)
+    );
+    if (currentRoom) {
+      let opponentSocketId = currentRoom.players.find(
+        (player) => player.socketId != socket.id
+      )?.socketId;
+      if (!opponentSocketId) return;
+      io.to(opponentSocketId).emit("opponentOnlineStateChanged", false);
+    }
+  });
+
+  socket.on("confirmOnlineState", (storedId, room_id) => {
+    let currentRoom = rooms.find((room) => room.room_id == room_id);
+    if (currentRoom) {
+      let opponentSocketId = currentRoom.players.find(
+        (player) => player.storedId != storedId
+      ).socketId;
+      io.to(opponentSocketId).emit("opponentOnlineStateChanged", true);
+    }
+  });
+});
+
+const PORT = process.env.PORT || 8080;
+
+// For Vercel compatibility
+if (process.env.VERCEL) {
+  module.exports = app;
+} else {
+  server.listen(PORT, () => {
+    console.log(`🚀 Socket.io server starting on port ${PORT}...`);
+  });
+}
