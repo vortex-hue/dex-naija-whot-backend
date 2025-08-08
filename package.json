@@ -1,5 +1,5 @@
 {
-  "name": "whot-server",
+  "name": "dex-naija-whot-backend",
   "version": "1.0.0",
   "description": "Whot card game server with Socket.io",
   "main": "index.js",
