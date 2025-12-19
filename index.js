@@ -331,9 +331,29 @@ io.on("connection", (socket) => {
     } catch (error) {
       console.error("Error in confirmOnlineState:", error);
     }
-  }
+  });
 
-socket.on("send_message", ({ room_id, message, senderId }) => {
+  socket.on("mark_read", ({ room_id, user_id }) => {
+    try {
+      let currentRoom = rooms.find((room) => room.room_id == room_id);
+      if (currentRoom && currentRoom.messages) {
+        let hasUpdates = false;
+        currentRoom.messages.forEach(msg => {
+          if (msg.senderId !== user_id && msg.status !== 'read') {
+            msg.status = 'read';
+            hasUpdates = true;
+          }
+        });
+        if (hasUpdates) {
+          io.to(room_id).emit("messages_read", { readerId: user_id });
+        }
+      }
+    } catch (error) {
+      console.error("Error in mark_read:", error);
+    }
+  });
+
+  socket.on("send_message", ({ room_id, message, senderId }) => {
     try {
       console.log(`💬 Chat: Room ${room_id} | Sender ${senderId}: ${message}`);
       let currentRoom = rooms.find((room) => room.room_id == room_id);
@@ -341,26 +361,26 @@ socket.on("send_message", ({ room_id, message, senderId }) => {
         // Ensure messages array exists (backward compatibility)
         if (!currentRoom.messages) currentRoom.messages = [];
 
-        const msgData = {
-          id: Date.now().toString(),
+        id: Date.now().toString(),
           senderId,
           text: message,
-          timestamp: new Date().toISOString()
-        };
-        currentRoom.messages.push(msgData);
-        // Limit history to last 50 messages to save memory
-        if (currentRoom.messages.length > 50) {
-          currentRoom.messages.shift();
-        }
-        io.to(room_id).emit("receive_message", msgData);
-        console.log(`✅ Broadcasted to ${room_id}`);
-      } else {
-        console.warn(`⚠️ Chat failed: Room ${room_id} not found`);
+            timestamp: new Date().toISOString(),
+              status: 'sent'
+      };
+      currentRoom.messages.push(msgData);
+      // Limit history to last 50 messages to save memory
+      if (currentRoom.messages.length > 50) {
+        currentRoom.messages.shift();
       }
-    } catch (error) {
-      console.error("Error in send_message:", error);
+      io.to(room_id).emit("receive_message", msgData);
+      console.log(`✅ Broadcasted to ${room_id}`);
+    } else {
+      console.warn(`⚠️ Chat failed: Room ${room_id} not found`);
     }
-  });
+  } catch (error) {
+    console.error("Error in send_message:", error);
+  }
+});
 });
 
 const PORT = process.env.PORT || 8080;
