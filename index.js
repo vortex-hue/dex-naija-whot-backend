@@ -361,26 +361,27 @@ io.on("connection", (socket) => {
         // Ensure messages array exists (backward compatibility)
         if (!currentRoom.messages) currentRoom.messages = [];
 
-        id: Date.now().toString(),
+        const msgData = {
+          id: Date.now().toString(),
           senderId,
           text: message,
-            timestamp: new Date().toISOString(),
-              status: 'sent'
-      };
-      currentRoom.messages.push(msgData);
-      // Limit history to last 50 messages to save memory
-      if (currentRoom.messages.length > 50) {
-        currentRoom.messages.shift();
+          timestamp: new Date().toISOString(),
+          status: 'sent'
+        };
+        currentRoom.messages.push(msgData);
+        // Limit history to last 50 messages to save memory
+        if (currentRoom.messages.length > 50) {
+          currentRoom.messages.shift();
+        }
+        io.to(room_id).emit("receive_message", msgData);
+        console.log(`✅ Broadcasted to ${room_id}`);
+      } else {
+        console.warn(`⚠️ Chat failed: Room ${room_id} not found`);
       }
-      io.to(room_id).emit("receive_message", msgData);
-      console.log(`✅ Broadcasted to ${room_id}`);
-    } else {
-      console.warn(`⚠️ Chat failed: Room ${room_id} not found`);
+    } catch (error) {
+      console.error("Error in send_message:", error);
     }
-  } catch (error) {
-    console.error("Error in send_message:", error);
-  }
-});
+  });
 });
 
 const PORT = process.env.PORT || 8080;
