@@ -142,6 +142,9 @@ io.on("connection", (socket) => {
             (player) => player.storedId != storedId
           ).socketId;
           io.to(opponentSocketId).emit("opponentOnlineStateChanged", true);
+
+          // Send chat history
+          socket.emit("chat_history", currentRoom.messages || []);
         }
       } else {
         // Check if player can actually join room... (existing logic)
@@ -182,6 +185,9 @@ io.on("connection", (socket) => {
           io.to(opponentSocketId).emit("opponentOnlineStateChanged", true);
 
           socket.broadcast.to(room_id).emit("confirmOnlineState");
+
+          // Send chat history
+          socket.emit("chat_history", currentRoom.messages || []);
         } else {
           io.to(socket.id).emit(
             "error",
@@ -214,6 +220,7 @@ io.on("connection", (socket) => {
         tournamentId: tournamentId || null,
         matchId: matchId || null,
         // End NEW Metadata
+        messages: [],
         players: [
           {
             storedId,
@@ -324,6 +331,28 @@ io.on("connection", (socket) => {
     } catch (error) {
       console.error("Error in confirmOnlineState:", error);
     }
+    socket.on("send_message", ({ room_id, message, senderId }) => {
+      try {
+        let currentRoom = rooms.find((room) => room.room_id == room_id);
+        if (currentRoom) {
+          const msgData = {
+            id: Date.now().toString(),
+            senderId,
+            text: message,
+            timestamp: new Date().toISOString()
+          };
+          currentRoom.messages.push(msgData);
+          // Limit history to last 50 messages to save memory
+          if (currentRoom.messages.length > 50) {
+            currentRoom.messages.shift();
+          }
+          io.to(room_id).emit("receive_message", msgData);
+        }
+      } catch (error) {
+        console.error("Error in send_message:", error);
+      }
+    });
+
   });
 });
 
