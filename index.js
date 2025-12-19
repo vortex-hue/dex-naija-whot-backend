@@ -232,77 +232,97 @@ io.on("connection", (socket) => {
   });
 
   socket.on("sendUpdatedState", (updatedState, room_id) => {
-    let currentRoom = rooms.find((room) => room.room_id == room_id);
-    if (currentRoom) {
-      if (updatedState.player === "one") {
-        currentRoom.playerOneState = updatedState;
-      } else {
-        currentRoom.playerOneState = reverseState(updatedState);
-      }
+    try {
+      let currentRoom = rooms.find((room) => room.room_id == room_id);
+      if (currentRoom) {
+        if (updatedState.player === "one") {
+          currentRoom.playerOneState = updatedState;
+        } else {
+          currentRoom.playerOneState = reverseState(updatedState);
+        }
 
-      io.in(room_id).emit("dispatch", {
-        type: "UPDATE_STATE",
-        payload: {
-          playerOneState: currentRoom.playerOneState,
-          playerTwoState: reverseState(currentRoom.playerOneState),
-        },
-      });
+        io.to(room_id).emit("dispatch", {
+          type: "UPDATE_STATE",
+          payload: {
+            playerOneState: currentRoom.playerOneState,
+            playerTwoState: reverseState(currentRoom.playerOneState),
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Error in sendUpdatedState:", error);
     }
   });
 
   socket.on("game_over", (data) => {
-    // data can be string (old way) or object (new way)
-    const room_id = typeof data === 'string' ? data : data.room_id;
-    const winnerInfo = typeof data === 'object' ? data : null;
+    try {
+      // data can be string (old way) or object (new way)
+      const room_id = typeof data === 'string' ? data : data.room_id;
+      const winnerInfo = typeof data === 'object' ? data : null;
 
-    // Check if it was a tournament game
-    const room = rooms.find(r => r.room_id == room_id);
+      // Check if it was a tournament game
+      const room = rooms.find(r => r.room_id == room_id);
 
-    if (room && room.isTournament && room.tournamentId && room.matchId && winnerInfo) {
-      // Determine winner Stored ID
-      let winnerStoredId = null;
+      if (room && room.isTournament && room.tournamentId && room.matchId && winnerInfo) {
+        // Determine winner Stored ID
+        let winnerStoredId = null;
 
-      // If reporter says 'user' won, and reporter is P1, then P1 won.
-      // We need to map 'user'/'opponent' to storedId
-      const reporter = room.players.find(p => p.storedId === winnerInfo.reporterStoredId);
+        // If reporter says 'user' won, and reporter is P1, then P1 won.
+        // We need to map 'user'/'opponent' to storedId
+        const reporter = room.players.find(p => p.storedId === winnerInfo.reporterStoredId);
 
-      if (reporter) {
-        if (winnerInfo.winner === 'user') {
-          winnerStoredId = reporter.storedId;
-        } else if (winnerInfo.winner === 'opponent') {
-          // Find the other player
-          const other = room.players.find(p => p.storedId !== reporter.storedId);
-          if (other) winnerStoredId = other.storedId;
-        }
+        if (reporter) {
+          if (winnerInfo.winner === 'user') {
+            winnerStoredId = reporter.storedId;
+          } else if (winnerInfo.winner === 'opponent') {
+            // Find the other player
+            const other = room.players.find(p => p.storedId !== reporter.storedId);
+            if (other) winnerStoredId = other.storedId;
+          }
 
-        if (winnerStoredId) {
-          console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId}`);
-          tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+          if (winnerStoredId) {
+            console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId}`);
+            tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+          }
         }
       }
-    }
 
-    rooms = rooms.filter((room) => room.room_id != room_id);
+      rooms = rooms.filter((room) => room.room_id != room_id);
+    } catch (error) {
+      console.error("Error in game_over:", error);
+    }
   });
 
   // Custom tournament game over handler
   // We'll ask frontend to emit 'tournament_match_win' instead of just relying on generic game_over
   socket.on("tournament_match_win", ({ room_id, tournamentId, matchId, winnerStoredId }) => {
-    tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
-    // Clean up room
-    rooms = rooms.filter((room) => room.room_id != room_id);
+    try {
+      tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
+      // Clean up room
+      rooms = rooms.filter((room) => room.room_id != room_id);
+    } catch (error) {
+      console.error("Error in tournament_match_win:", error);
+    }
   });
 
   socket.on("disconnect", () => {
     // ... existing disconnect logic ...
   });
+
   socket.on("confirmOnlineState", (storedId, room_id) => {
-    let currentRoom = rooms.find((room) => room.room_id == room_id);
-    if (currentRoom) {
-      let opponentSocketId = currentRoom.players.find(
-        (player) => player.storedId != storedId
-      ).socketId;
-      io.to(opponentSocketId).emit("opponentOnlineStateChanged", true);
+    try {
+      let currentRoom = rooms.find((room) => room.room_id == room_id);
+      if (currentRoom) {
+        let opponent = currentRoom.players.find(
+          (player) => player.storedId != storedId
+        );
+
+        if (opponent && opponent.socketId) {
+          io.to(opponent.socketId).emit("opponentOnlineStateChanged", true);
+        }
+      }
+    } catch (error) {
+      console.error("Error in confirmOnlineState:", error);
     }
   });
 });
