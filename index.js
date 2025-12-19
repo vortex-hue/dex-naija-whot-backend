@@ -231,7 +231,24 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ... (sendUpdatedState handler remains mostly same) ...
+  socket.on("sendUpdatedState", (updatedState, room_id) => {
+    let currentRoom = rooms.find((room) => room.room_id == room_id);
+    if (currentRoom) {
+      if (updatedState.player === "one") {
+        currentRoom.playerOneState = updatedState;
+      } else {
+        currentRoom.playerOneState = reverseState(updatedState);
+      }
+
+      io.in(room_id).emit("dispatch", {
+        type: "UPDATE_STATE",
+        payload: {
+          playerOneState: currentRoom.playerOneState,
+          playerTwoState: reverseState(currentRoom.playerOneState),
+        },
+      });
+    }
+  });
 
   socket.on("game_over", (data) => {
     // data can be string (old way) or object (new way)
