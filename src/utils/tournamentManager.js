@@ -229,15 +229,15 @@ class TournamentManager {
     }
 
     getPublicTournamentState(tournament) {
-        const pids = (tournament.players || []).map(p => p.storedId || "ID_MISSING");
+        const participantIds = (tournament.players || []).map(p => p.storedId || "ID_MISSING");
         const state = {
             id: tournament.id,
             name: tournament.name,
             size: tournament.size,
             status: tournament.status,
             currentRound: tournament.round,
-            pcount: tournament.players?.length || 0,
-            pids: pids,
+            playersCount: tournament.players?.length || 0,
+            participants: participantIds,
             matches: (tournament.matches || []).map(m => ({
                 id: m.id,
                 p1: m.p1 ? { name: m.p1.name, storedId: m.p1.storedId } : null,
@@ -247,7 +247,7 @@ class TournamentManager {
             })),
             winner: tournament.winner ? { name: tournament.winner.name, storedId: tournament.winner.storedId } : null
         };
-        console.log(`📡 Sending state for tournament ${tournament.id} | Participants: ${state.participants.length}`);
+        console.log(`📡 Sending state for tournament ${tournament.id} | Participants: ${state.participants?.length}`);
         return state;
     }
 
