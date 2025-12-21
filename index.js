@@ -344,7 +344,18 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    // ... existing disconnect logic ...
+    console.log(`🔌 Client disconnected: ${socket.id}`);
+    // Find rooms where this socket is a player
+    rooms.forEach(room => {
+      const player = room.players.find(p => p.socketId === socket.id);
+      if (player) {
+        // Notify opponent
+        const opponent = room.players.find(p => p.socketId !== socket.id);
+        if (opponent) {
+          io.to(opponent.socketId).emit("opponentOnlineStateChanged", false);
+        }
+      }
+    });
   });
 
   socket.on("confirmOnlineState", (storedId, room_id) => {
