@@ -327,7 +327,7 @@ io.on("connection", (socket) => {
   });
 
   // Custom tournament game over handler
-  socket.on("tournament_match_win", ({ room_id, tournamentId, matchId, winnerStoredId }) => {
+  socket.on("tournament_match_win", ({ room_id, tournamentId, matchId, winnerStoredId, winnerType, reporterStoredId }) => {
     try {
       const room = rooms.find(r => r.room_id == room_id);
 
@@ -340,10 +340,26 @@ io.on("connection", (socket) => {
       }
 
       if (tournamentId && matchId) {
-        tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
+        let finalWinnerId = winnerStoredId;
 
-        // Notify both players
-        io.to(room_id).emit("match_over", { winnerStoredId });
+        // If client sends winnerType (user/opponent) and reporterStoredId, 
+        // we resolve the ID server-side for absolute reliability.
+        if (winnerType && reporterStoredId && room) {
+          if (winnerType === 'user') {
+            finalWinnerId = reporterStoredId;
+          } else {
+            const other = room.players.find(p => p.storedId !== reporterStoredId);
+            if (other) finalWinnerId = other.storedId;
+          }
+        }
+
+        if (finalWinnerId) {
+          tournamentManager.reportMatchResult(tournamentId, matchId, finalWinnerId);
+          // Notify both players
+          io.to(room_id).emit("match_over", { winnerStoredId: finalWinnerId });
+        } else {
+          console.error("❌ tournament_match_win failed: Could not resolve winner ID");
+        }
       } else {
         console.error("❌ tournament_match_win failed: Missing metadata", { room_id, tournamentId, matchId });
       }
