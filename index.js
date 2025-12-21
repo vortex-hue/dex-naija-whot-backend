@@ -246,6 +246,7 @@ io.on("connection", (socket) => {
           },
         ],
         playerOneState,
+        matchStartedAt: Date.now(), // Track start time for 10-min limit
       });
 
       io.to(socket.id).emit("dispatch", {
@@ -407,15 +408,12 @@ io.on("connection", (socket) => {
       console.error("Error in mark_read:", error);
     }
   });
-
   socket.on("send_message", ({ room_id, message, senderId }) => {
     try {
       console.log(`💬 Chat: Room ${room_id} | Sender ${senderId}: ${message}`);
       let currentRoom = rooms.find((room) => room.room_id == room_id);
       if (currentRoom) {
-        // Ensure messages array exists (backward compatibility)
         if (!currentRoom.messages) currentRoom.messages = [];
-
         const msgData = {
           id: Date.now().toString(),
           senderId,
@@ -424,20 +422,74 @@ io.on("connection", (socket) => {
           status: 'sent'
         };
         currentRoom.messages.push(msgData);
-        // Limit history to last 50 messages to save memory
-        if (currentRoom.messages.length > 50) {
-          currentRoom.messages.shift();
-        }
+        if (currentRoom.messages.length > 50) currentRoom.messages.shift();
         io.to(room_id).emit("receive_message", msgData);
-        console.log(`✅ Broadcasted to ${room_id}`);
-      } else {
-        console.warn(`⚠️ Chat failed: Room ${room_id} not found`);
       }
     } catch (error) {
       console.error("Error in send_message:", error);
     }
   });
 });
+
+// Timer and Auto-Win Logic (10-minute rounds)
+const ROUND_TIME_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+
+setInterval(() => {
+  const now = Date.now();
+  rooms.forEach((room) => {
+    if (!room.matchStartedAt) return;
+
+    const elapsed = now - room.matchStartedAt;
+    const timeLeft = Math.max(0, Math.floor((ROUND_TIME_LIMIT_MS - elapsed) / 1000));
+
+    // Broadcast time left to players if in the last 60 seconds
+    if (timeLeft <= 60 && timeLeft > 0) {
+      io.to(room.room_id).emit("timer_update", { timeLeft });
+    }
+
+    if (elapsed >= ROUND_TIME_LIMIT_MS) {
+      console.log(`⏰ Time up for room ${room.room_id}. Calculating winner...`);
+
+      // Calculate scores
+      const p1Cards = room.playerOneState.userCards || [];
+      const p2Cards = room.playerOneState.opponentCards || [];
+
+      const p1Score = p1Cards.reduce((sum, card) => sum + (card.number || 0), 0);
+      const p2Score = p2Cards.reduce((sum, card) => sum + (card.number || 0), 0);
+
+      console.log(`Scores - P1: ${p1Score}, P2: ${p2Score}`);
+
+      let winnerStoredId = null;
+      const p1 = room.players.find(p => p.player === "one");
+      const p2 = room.players.find(p => p.player === "two");
+
+      if (p1Score < p2Score) {
+        winnerStoredId = p1 ? p1.storedId : null;
+      } else if (p2Score < p1Score) {
+        winnerStoredId = p2 ? p2.storedId : null;
+      } else {
+        // Tie-breaker: random or just P1 for now? 
+        // User said: "lowest total HOLDER ... awarded the winner"
+        // If equal, let's pick one or just call it P1's luck.
+        winnerStoredId = p1 ? p1.storedId : null;
+      }
+
+      if (winnerStoredId) {
+        if (room.isTournament && room.tournamentId && room.matchId) {
+          tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+        }
+        io.to(room.room_id).emit("match_over", {
+          winnerStoredId,
+          reason: "time_expired",
+          scores: { p1: p1Score, p2: p2Score }
+        });
+      }
+
+      // Cleanup room
+      rooms = rooms.filter((r) => r.room_id != room.room_id);
+    }
+  });
+}, 1000);
 
 const PORT = process.env.PORT || 8080;
 
