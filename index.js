@@ -309,23 +309,29 @@ io.on("connection", (socket) => {
           if (winnerStoredId) {
             console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId}`);
             tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+
+            // Notify both players that the match is officially over
+            io.to(room_id).emit("match_over", { winnerStoredId });
           }
         }
       }
 
-      rooms = rooms.filter((room) => room.room_id != room_id);
+      // Delay room cleanup slightly to ensure messages are delivered
+      setTimeout(() => {
+        rooms = rooms.filter((room) => room.room_id != room_id);
+      }, 1000);
     } catch (error) {
       console.error("Error in game_over:", error);
     }
   });
 
   // Custom tournament game over handler
-  // We'll ask frontend to emit 'tournament_match_win' instead of just relying on generic game_over
   socket.on("tournament_match_win", ({ room_id, tournamentId, matchId, winnerStoredId }) => {
     try {
+      const room = rooms.find(r => r.room_id == room_id);
+
       // Fallback: If metadata missing, try to find it in the room
       if (!tournamentId || !matchId) {
-        const room = rooms.find(r => r.room_id == room_id);
         if (room && room.isTournament) {
           tournamentId = room.tournamentId;
           matchId = room.matchId;
@@ -334,12 +340,17 @@ io.on("connection", (socket) => {
 
       if (tournamentId && matchId) {
         tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
+
+        // Notify both players
+        io.to(room_id).emit("match_over", { winnerStoredId });
       } else {
         console.error("❌ tournament_match_win failed: Missing metadata", { room_id, tournamentId, matchId });
       }
 
-      // Clean up room
-      rooms = rooms.filter((room) => room.room_id != room_id);
+      // Clean up room with a slight delay
+      setTimeout(() => {
+        rooms = rooms.filter((r) => r.room_id != room_id);
+      }, 1000);
     } catch (error) {
       console.error("Error in tournament_match_win:", error);
     }
