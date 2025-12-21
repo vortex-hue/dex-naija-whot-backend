@@ -138,6 +138,7 @@ io.on("connection", (socket) => {
             if (room.room_id == room_id) {
               return {
                 ...room,
+                matchStartedAt: Date.now(), // Reset timer for fairness when 2nd player joins
                 players: [
                   ...room.players,
                   { storedId, socketId: socket.id, player: "two" },
@@ -451,60 +452,64 @@ io.on("connection", (socket) => {
 const ROUND_TIME_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
 
 setInterval(() => {
-  const now = Date.now();
-  rooms.forEach((room) => {
-    if (!room.matchStartedAt) return;
+  try {
+    const now = Date.now();
+    rooms.forEach((room) => {
+      // Safety check: must have matchStartedAt AND players
+      if (!room.matchStartedAt || !room.players || room.players.length < 2) return;
 
-    const elapsed = now - room.matchStartedAt;
-    const timeLeft = Math.max(0, Math.floor((ROUND_TIME_LIMIT_MS - elapsed) / 1000));
+      const elapsed = now - room.matchStartedAt;
+      const timeLeft = Math.max(0, Math.floor((ROUND_TIME_LIMIT_MS - elapsed) / 1000));
 
-    // Broadcast time left to players if in the last 60 seconds
-    if (timeLeft <= 60 && timeLeft > 0) {
-      io.to(room.room_id).emit("timer_update", { timeLeft });
-    }
-
-    if (elapsed >= ROUND_TIME_LIMIT_MS) {
-      console.log(`⏰ Time up for room ${room.room_id}. Calculating winner...`);
-
-      // Calculate scores
-      const p1Cards = room.playerOneState.userCards || [];
-      const p2Cards = room.playerOneState.opponentCards || [];
-
-      const p1Score = p1Cards.reduce((sum, card) => sum + (card.number || 0), 0);
-      const p2Score = p2Cards.reduce((sum, card) => sum + (card.number || 0), 0);
-
-      console.log(`Scores - P1: ${p1Score}, P2: ${p2Score}`);
-
-      let winnerStoredId = null;
-      const p1 = room.players.find(p => p.player === "one");
-      const p2 = room.players.find(p => p.player === "two");
-
-      if (p1Score < p2Score) {
-        winnerStoredId = p1 ? p1.storedId : null;
-      } else if (p2Score < p1Score) {
-        winnerStoredId = p2 ? p2.storedId : null;
-      } else {
-        // Tie-breaker: random or just P1 for now? 
-        // User said: "lowest total HOLDER ... awarded the winner"
-        // If equal, let's pick one or just call it P1's luck.
-        winnerStoredId = p1 ? p1.storedId : null;
+      // Broadcast time left to players if in the last 60 seconds
+      if (timeLeft <= 60 && timeLeft > 0) {
+        io.to(room.room_id).emit("timer_update", { timeLeft });
       }
 
-      if (winnerStoredId) {
-        if (room.isTournament && room.tournamentId && room.matchId) {
-          tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+      if (elapsed >= ROUND_TIME_LIMIT_MS) {
+        console.log(`⏰ Time up for room ${room.room_id}. Calculating winner...`);
+
+        // Safety check for state existence
+        if (!room.playerOneState || !room.playerOneState.userCards) {
+          console.warn(`⚠️ Timer: Room ${room.room_id} has no valid state for scoring. Skipping.`);
+          return;
         }
-        io.to(room.room_id).emit("match_over", {
-          winnerStoredId,
-          reason: "time_expired",
-          scores: { p1: p1Score, p2: p2Score }
-        });
-      }
 
-      // Cleanup room
-      rooms = rooms.filter((r) => r.room_id != room.room_id);
-    }
-  });
+        // Calculate scores
+        const p1Cards = room.playerOneState.userCards || [];
+        const p2Cards = room.playerOneState.opponentCards || [];
+
+        const p1Score = p1Cards.reduce((sum, c) => sum + (c.number || 0), 0);
+        const p2Score = p2Cards.reduce((sum, c) => sum + (c.number || 0), 0);
+
+        let winnerStoredId = null;
+        const p1 = room.players.find(p => p.player === 'one');
+        const p2 = room.players.find(p => p.player === 'two');
+
+        if (p1Score < p2Score) {
+          winnerStoredId = p1?.storedId;
+        } else if (p2Score < p1Score) {
+          winnerStoredId = p2?.storedId;
+        } else {
+          // Tie: Award to Player 1 (standard tie-breaker)
+          winnerStoredId = p1?.storedId;
+        }
+
+        if (winnerStoredId) {
+          console.log(`🏆 Timer Winner: ${winnerStoredId} (P1: ${p1Score} vs P2: ${p2Score})`);
+          if (room.isTournament && room.tournamentId && room.matchId) {
+            tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+          }
+          io.to(room.room_id).emit("match_over", { winnerStoredId, reason: "time_expired", scores: { p1: p1Score, p2: p2Score } });
+        }
+
+        // Remove room from rooms array
+        rooms = rooms.filter((r) => r.room_id != room.room_id);
+      }
+    });
+  } catch (error) {
+    console.error("CRITICAL: Timer Interval Error:", error);
+  }
 }, 1000);
 
 const PORT = process.env.PORT || 8080;
