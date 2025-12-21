@@ -265,7 +265,9 @@ io.on("connection", (socket) => {
           currentRoom.playerOneState = reverseState(updatedState);
         }
 
-        io.to(room_id).emit("dispatch", {
+        // Use socket.to instead of io.to to avoid echo to the sender
+        // This prevents the sender's local state from being overwritten by its own sync message
+        socket.to(room_id).emit("dispatch", {
           type: "UPDATE_STATE",
           payload: {
             playerOneState: currentRoom.playerOneState,
