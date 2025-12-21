@@ -61,7 +61,16 @@ io.on("connection", (socket) => {
     io.emit("tournaments_list", tournamentManager.getAllTournaments());
   });
 
-  socket.on("join_tournament", ({ tournamentId, storedId, name }) => {
+  socket.on("join_tournament", (payload) => {
+    console.log("DEBUG: join_tournament payload:", payload);
+    const { tournamentId, storedId, name } = payload || {};
+
+    if (!storedId) {
+      console.error("❌ join_tournament failed: Missing storedId", payload);
+      socket.emit("error", "Failed to join: Missing Player ID");
+      return;
+    }
+
     const result = tournamentManager.joinTournament(tournamentId, { storedId, socketId: socket.id, name: name || `Player ${storedId.substr(0, 4)}` });
     if (!result.success) {
       socket.emit("error", result.message);

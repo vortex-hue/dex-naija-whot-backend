@@ -236,7 +236,7 @@ class TournamentManager {
             status: tournament.status,
             currentRound: tournament.round,
             playersCount: tournament.players?.length || 0,
-            participants: (tournament.players || []).map(p => p.storedId).filter(id => !!id),
+            participants: (tournament.players || []).map(p => p.storedId || "MISSING"),
             matches: (tournament.matches || []).map(m => ({
                 id: m.id,
                 p1: m.p1 ? { name: m.p1.name, storedId: m.p1.storedId } : null,
