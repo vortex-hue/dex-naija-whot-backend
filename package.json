@@ -4,7 +4,7 @@
   "description": "Whot card game server with Socket.io",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "lsof -t -i:8080 | xargs kill -9 || true && node index.js",
     "dev": "node index.js"
   },
   "engines": {
