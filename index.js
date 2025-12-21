@@ -71,6 +71,14 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("request_match_info", ({ tournamentId, matchId }) => {
+    tournamentManager.requestMatchInfo(socket, tournamentId, matchId);
+  });
+
+  socket.on("reconnect_tournament", ({ tournamentId, storedId }) => {
+    tournamentManager.reconnectTournament(tournamentId, { storedId, socketId: socket.id });
+  });
+
   // Keep track of which game room belongs to which tournament match
   // This is a simplified way to link them without rewriting the whole game engine
   socket.on("join_room", ({ room_id, storedId, isTournament, matchId, tournamentId }) => {
@@ -304,7 +312,21 @@ io.on("connection", (socket) => {
   // We'll ask frontend to emit 'tournament_match_win' instead of just relying on generic game_over
   socket.on("tournament_match_win", ({ room_id, tournamentId, matchId, winnerStoredId }) => {
     try {
-      tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
+      // Fallback: If metadata missing, try to find it in the room
+      if (!tournamentId || !matchId) {
+        const room = rooms.find(r => r.room_id == room_id);
+        if (room && room.isTournament) {
+          tournamentId = room.tournamentId;
+          matchId = room.matchId;
+        }
+      }
+
+      if (tournamentId && matchId) {
+        tournamentManager.reportMatchResult(tournamentId, matchId, winnerStoredId);
+      } else {
+        console.error("❌ tournament_match_win failed: Missing metadata", { room_id, tournamentId, matchId });
+      }
+
       // Clean up room
       rooms = rooms.filter((room) => room.room_id != room_id);
     } catch (error) {

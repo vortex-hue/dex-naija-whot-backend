@@ -20,22 +20,46 @@ class TournamentManager {
         return tournament;
     }
 
+    reconnectTournament(tournamentId, player) {
+        const tournament = this.tournaments.get(tournamentId);
+        if (!tournament) return { success: false, message: "Tournament not found" };
+
+        const existingPlayer = tournament.players.find(p => p.storedId === player.storedId);
+        if (existingPlayer) {
+            const updatedPlayer = { ...existingPlayer, socketId: player.socketId };
+
+            tournament.players = tournament.players.map(p =>
+                p.storedId === player.storedId ? updatedPlayer : p
+            );
+
+            // Update matches references
+            tournament.matches.forEach(m => {
+                if (m.p1 && m.p1.storedId === player.storedId) m.p1 = updatedPlayer;
+                if (m.p2 && m.p2.storedId === player.storedId) m.p2 = updatedPlayer;
+                if (m.winner && m.winner.storedId === player.storedId) m.winner = updatedPlayer;
+            });
+
+            this.io.emit('tournament_update', this.getPublicTournamentState(tournament));
+            return { success: true, tournament: this.getPublicTournamentState(tournament) };
+        }
+        return { success: false, message: "Player not a participant" };
+    }
+
     joinTournament(tournamentId, player) {
         const tournament = this.tournaments.get(tournamentId);
 
         if (!tournament) return { success: false, message: "Tournament not found" };
+
+        if (tournament.players.some(p => p.storedId === player.storedId)) {
+            console.log(`📡 Player ${player.storedId} re-joining tournament ${tournamentId}`);
+            return this.reconnectTournament(tournamentId, player);
+        }
+
         if (tournament.status !== 'waiting') return { success: false, message: "Tournament already started" };
         if (tournament.players.length >= tournament.size) return { success: false, message: "Tournament full" };
 
-        // Check if player already joined
-        if (tournament.players.some(p => p.storedId === player.storedId)) {
-            // Re-join logic (update socket id)
-            tournament.players = tournament.players.map(p =>
-                p.storedId === player.storedId ? { ...p, socketId: player.socketId } : p
-            );
-        } else {
-            tournament.players.push(player);
-        }
+        console.log(`📡 Player ${player.storedId} joining tournament ${tournamentId}. Name: ${player.name}`);
+        tournament.players.push(player);
 
         // Broadcast update
         this.io.emit('tournament_update', this.getPublicTournamentState(tournament));
@@ -91,18 +115,34 @@ class TournamentManager {
         const currentRoundMatches = tournament.matches.filter(m => m.round === tournament.round);
         const allFinished = currentRoundMatches.every(m => m.winner !== null);
 
-        if (!allFinished) return;
-
-        const winners = currentRoundMatches.map(m => m.winner);
-
-        // If only 1 winner, tournament over
-        if (winners.length === 1) {
-            tournament.status = 'completed';
-            tournament.winner = winners[0];
+        if (!allFinished) {
             this.io.emit('tournament_update', this.getPublicTournamentState(tournament));
             return;
         }
 
+        const winners = currentRoundMatches.map(m => m.winner).filter(w => w !== null);
+
+        // If only 1 winner AND it's the final round based on size
+        const totalRoundsNeeded = Math.log2(tournament.size);
+        if (winners.length === 1 && tournament.round >= totalRoundsNeeded) {
+            tournament.status = 'completed';
+            tournament.winner = winners[0];
+            this.io.emit('tournament_update', this.getPublicTournamentState(tournament));
+
+            // Schedule cleanup after 10 minutes
+            console.log(`🗑️ Scheduling cleanup for tournament ${tournament.id} in 10 minutes`);
+            setTimeout(() => {
+                if (this.tournaments.has(tournament.id)) {
+                    this.tournaments.delete(tournament.id);
+                    this.io.emit('tournaments_list', this.getAllTournaments()); // Refresh list for everyone
+                    console.log(`🗑️ Tournament ${tournament.id} deleted`);
+                }
+            }, 10 * 60 * 1000);
+
+            return;
+        }
+
+        // If we have winners but haven't reached final, advance
         tournament.round++;
 
         // Create new matches from winners
@@ -135,24 +175,51 @@ class TournamentManager {
         this.advanceRound(tournament);
     }
 
+    requestMatchInfo(socket, tournamentId, matchId) {
+        const tournament = this.tournaments.get(tournamentId);
+        if (!tournament) return;
+
+        const match = tournament.matches.find(m => m.id === matchId);
+        if (!match) return;
+
+        // Generate or retrieve room code (deterministic based on matchID for simplicity now, or regenerate)
+        // Ideally we should store the generated room code in the match object to be consistent
+        // For now, let's look if we can find an existing room for this match in the main rooms array? 
+        // No, TournamentManager doesn't read 'rooms' array directly easily without passing it in.
+        // Let's just generate a new one or hashed one.
+        // Wait, if p1 is already in room X, p2 must go to room X.
+        // We MUST store the room code in the match object once created.
+
+        if (match.roomCode) {
+            const payload = {
+                roomId: match.roomCode,
+                matchId: match.id,
+                opponent: match.p1.socketId === socket.id ? match.p2.name : match.p1.name,
+                tournamentId: tournament.id
+            };
+            socket.emit('tournament_match_ready', payload);
+        } else {
+            // Should have been created?
+            this.notifyMatchReady(tournament);
+        }
+    }
+
     notifyMatchReady(tournament) {
         // Find active matches for current round
         const activeMatches = tournament.matches.filter(m => m.round === tournament.round && !m.winner);
 
         activeMatches.forEach(match => {
             if (match.p1 && match.p2) {
-                // Create a unique game room ID for this match
-                const gameRoomId = match.id.substring(0, 4); // Simplified room ID for standard whot game compatibility, but ideally should be unique. 
-                // Actually, let's just use the match ID as the room ID, but the standard game expects a 4 char code.
-                // Let's generate a temporary random 4-char code for the actual game room
-                const gameRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-
-                // Store mapping if needed, or just tell players where to go
+                // Generate room code if not exists
+                if (!match.roomCode) {
+                    match.roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+                }
 
                 const payload = {
-                    roomId: gameRoomCode,
+                    roomId: match.roomCode,
                     matchId: match.id,
-                    opponent: match.p2.name
+                    opponent: match.p2.name,
+                    tournamentId: tournament.id
                 };
 
                 this.io.to(match.p1.socketId).emit('tournament_match_ready', { ...payload, opponent: match.p2.name });
@@ -162,22 +229,25 @@ class TournamentManager {
     }
 
     getPublicTournamentState(tournament) {
-        return {
+        const state = {
             id: tournament.id,
             name: tournament.name,
             size: tournament.size,
             status: tournament.status,
             currentRound: tournament.round,
-            playersCount: tournament.players.length,
-            matches: tournament.matches.map(m => ({
+            playersCount: tournament.players?.length || 0,
+            participants: (tournament.players || []).map(p => p.storedId).filter(id => !!id),
+            matches: (tournament.matches || []).map(m => ({
                 id: m.id,
-                p1: m.p1 ? { name: m.p1.name } : null,
-                p2: m.p2 ? { name: m.p2.name } : null,
-                winner: m.winner ? { name: m.winner.name } : null,
+                p1: m.p1 ? { name: m.p1.name, storedId: m.p1.storedId } : null,
+                p2: m.p2 ? { name: m.p2.name, storedId: m.p2.storedId } : null,
+                winner: m.winner ? { name: m.winner.name, storedId: m.winner.storedId } : null,
                 round: m.round
             })),
-            winner: tournament.winner ? { name: tournament.winner.name } : null
+            winner: tournament.winner ? { name: tournament.winner.name, storedId: tournament.winner.storedId } : null
         };
+        console.log(`📡 Sending state for tournament ${tournament.id} | Participants: ${state.participants.length}`);
+        return state;
     }
 
     getAllTournaments() {
