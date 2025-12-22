@@ -448,7 +448,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// Timer and Auto-Win Logic (15-minute rounds)
+/* 
+// Temporarily disabled: Timer and Auto-Win Logic (15-minute rounds)
 const ROUND_TIME_LIMIT_MS = 15 * 60 * 1000; // 15 minutes
 
 setInterval(() => {
@@ -511,6 +512,7 @@ setInterval(() => {
     console.error("CRITICAL: Timer Interval Error:", error);
   }
 }, 1000);
+*/
 
 const PORT = process.env.PORT || 8080;
 

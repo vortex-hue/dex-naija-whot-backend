@@ -129,15 +129,15 @@ class TournamentManager {
             tournament.winner = winners[0];
             this.io.emit('tournament_update', this.getPublicTournamentState(tournament));
 
-            // Schedule cleanup after 10 minutes
-            console.log(`🗑️ Scheduling cleanup for tournament ${tournament.id} in 10 minutes`);
+            // Schedule cleanup after 1 hour
+            console.log(`🗑️ Scheduling cleanup for tournament ${tournament.id} in 1 hour`);
             setTimeout(() => {
                 if (this.tournaments.has(tournament.id)) {
                     this.tournaments.delete(tournament.id);
                     this.io.emit('tournaments_list', this.getAllTournaments()); // Refresh list for everyone
                     console.log(`🗑️ Tournament ${tournament.id} deleted`);
                 }
-            }, 10 * 60 * 1000);
+            }, 60 * 60 * 1000);
 
             return;
         }
