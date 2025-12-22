@@ -448,8 +448,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// Timer and Auto-Win Logic (10-minute rounds)
-const ROUND_TIME_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+// Timer and Auto-Win Logic (15-minute rounds)
+const ROUND_TIME_LIMIT_MS = 15 * 60 * 1000; // 15 minutes
 
 setInterval(() => {
   try {
