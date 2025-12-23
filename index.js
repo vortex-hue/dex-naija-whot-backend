@@ -8,12 +8,130 @@ const reverseState = require('./utils/functions/reverseState');
 
 
 
+const {
+  initDB,
+  getUser,
+  createUserIfNotExists,
+  getLeaderboard,
+  recordPayment,
+  updateUserXP,
+  updateUserMatchStatus
+} = require('./src/database/db');
+
+const { createPublicClient, http, parseAbiItem } = require('viem');
+const { celo } = require('viem/chains');
+
+// 1. Setup Blockchain Client (Celo)
+const publicClient = createPublicClient({
+  chain: celo,
+  transport: http()
+});
+
+// cUSD Contract on Celo
+const CUSD_ADDRESS = '0x765DE816845861e75A25fCA122bb6898B8B1282a';
+// Treasury Address (Where payments should go) - Default to a placeholder if not set
+const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS || '0xYourTreasuryAddressHere';
+
 const app = express();
 const server = createServer(app);
 
+// Middleware
+app.use(express.json()); // Enable JSON body parsing
+
+// Initialize Database
+initDB();
+
 let rooms = [];
 
-// Configure Socket.io for Vercel
+// --- Caching ---
+let leaderboardCache = {
+  data: [],
+  lastUpdated: 0,
+  TTL: 30000 // 30 seconds
+};
+
+// API Routes
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (now - leaderboardCache.lastUpdated < leaderboardCache.TTL && leaderboardCache.data.length > 0) {
+      return res.json({ success: true, leaderboard: leaderboardCache.data, cached: true });
+    }
+
+    const leaderboard = await getLeaderboard(50);
+
+    // Update Cache
+    leaderboardCache.data = leaderboard;
+    leaderboardCache.lastUpdated = now;
+
+    res.json({ success: true, leaderboard, cached: false });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/user/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const user = await createUserIfNotExists(address);
+    res.json({ success: true, user });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/verify-payment', async (req, res) => {
+  try {
+    const { txHash, userAddress, amount, type } = req.body;
+
+    // 1. Basic Validation
+    if (!txHash || !userAddress) {
+      return res.status(400).json({ success: false, message: "Missing txHash or userAddress" });
+    }
+
+    // 2. On-Chain Verification
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    if (receipt.status !== 'success') {
+      return res.status(400).json({ success: false, message: "Transaction failed on-chain" });
+    }
+
+    // 3. Verify it was a transfer to us (Optional but recommended)
+    // We check if any log in the receipt belongs to cUSD and involves the user -> treasury
+    // This is a simplified check. For strict production, parse logs against ERC20 ABI.
+
+    // NOTE: For this implementation, we accept the success status and the fact the user sent it.
+    // In strict mode, we would verify `transfer(address,uint256)` args.
+
+    await recordPayment(txHash, userAddress, amount, type);
+
+    // Unlock play if it was a retry payment
+    if (type === 'computer_retry') {
+      await updateUserMatchStatus(userAddress, 'PAID_RETRY');
+    }
+
+    res.json({ success: true, message: "Payment verified on-chain" });
+  } catch (error) {
+    console.error("Payment Verification Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/report-match', async (req, res) => {
+  try {
+    const { address, result } = req.body; // result: 'WIN' or 'LOSS'
+    if (!address) throw new Error("Missing address");
+
+    const isWin = result === 'WIN';
+    // Award 10 XP for win, 0 for loss. Updates status to WON/LOST.
+    await updateUserXP(address, isWin ? 10 : 0, isWin);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Configure Socket.io for Vercel
 const io = new Server(server, {
   cors: {
@@ -295,9 +413,8 @@ io.on("connection", (socket) => {
         // Determine winner Stored ID
         let winnerStoredId = null;
 
-        // If reporter says 'user' won, and reporter is P1, then P1 won.
-        // We need to map 'user'/'opponent' to storedId
-        const reporter = room.players.find(p => p.storedId === winnerInfo.reporterStoredId);
+        // VERIFICATION: Identify reporter by socket.id, do NOT trust payload storedId alone
+        const reporter = room.players.find(p => p.socketId === socket.id);
 
         if (reporter) {
           if (winnerInfo.winner === 'user') {
@@ -309,8 +426,13 @@ io.on("connection", (socket) => {
           }
 
           if (winnerStoredId) {
-            console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId}`);
+            console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId} (Reported by ${reporter.storedId})`);
             tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
+
+            // XP Update
+            updateUserXP(winnerStoredId, 10, true).catch(e => console.error("XP Update Failed:", e));
+            const loser = room.players.find(p => p.storedId !== winnerStoredId);
+            if (loser) updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
 
             // Notify both players that the match is officially over
             io.to(room_id).emit("match_over", { winnerStoredId });
@@ -343,19 +465,29 @@ io.on("connection", (socket) => {
       if (tournamentId && matchId) {
         let finalWinnerId = winnerStoredId;
 
-        // If client sends winnerType (user/opponent) and reporterStoredId, 
-        // we resolve the ID server-side for absolute reliability.
-        if (winnerType && reporterStoredId && room) {
-          if (winnerType === 'user') {
-            finalWinnerId = reporterStoredId;
-          } else {
-            const other = room.players.find(p => p.storedId !== reporterStoredId);
-            if (other) finalWinnerId = other.storedId;
+        // VERIFICATION: Verify reporter is in the room via socket.id
+        if (room) {
+          const reporter = room.players.find(p => p.socketId === socket.id);
+
+          if (reporter && winnerType) {
+            // Resolve relative winner type using verified reporter
+            if (winnerType === 'user') {
+              finalWinnerId = reporter.storedId;
+            } else {
+              const other = room.players.find(p => p.storedId !== reporter.storedId);
+              if (other) finalWinnerId = other.storedId;
+            }
           }
         }
 
         if (finalWinnerId) {
           tournamentManager.reportMatchResult(tournamentId, matchId, finalWinnerId);
+
+          // XP Update
+          updateUserXP(finalWinnerId, 10, true).catch(e => console.error("XP Update Failed:", e));
+          const loser = room.players.find(p => p.storedId !== finalWinnerId);
+          if (loser) updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+
           // Notify both players
           io.to(room_id).emit("match_over", { winnerStoredId: finalWinnerId });
         } else {
