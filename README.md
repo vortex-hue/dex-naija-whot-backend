@@ -147,13 +147,18 @@ whot-server/
 └── README.md
 ```
 
-## 🎮 Game Features
+## 🎮 Game Features (Stable Edition)
 
-- **Real-time multiplayer gameplay**
-- **Room-based game sessions**
-- **Player state synchronization**
-- **Opponent online/offline detection**
-- **Game session persistence**
+- **Real-time Multiplayer**: Powered by Socket.io with low-latency event broadcasting.
+- **Tournament Engine**: Advanced bracket management for 2, 4, and 8-player tournaments.
+- **Authoritative Winner Resolution**: Server-side logic to resolve winner IDs and prevent client-side desyncs.
+- **Infinite Market Flow**: Coordinates with the frontend to ensure the market deck never depletes.
+- **Stability Safeguards**:
+    - **Defensive Timer Loop**: Safeguards against uninitialized room crashes.
+    - **Fair Match Start**: Timers (when enabled) start only when both players are connected.
+    - **Cleanup Logic**: Automated room disposal (default 1 hour after match completion).
+- **Online/Offline Detection**: Real-time monitoring of opponent connection states.
+- **Chat System**: Integrated real-time chat with message status tracking.
 
 ## 🚀 Deployment
 
