@@ -50,6 +50,9 @@ let leaderboardCache = {
   TTL: 30000 // 30 seconds
 };
 
+// Helper to validate EVM address
+const isValidAddress = (addr) => typeof addr === 'string' && addr.startsWith('0x') && addr.length === 42;
+
 // API Routes
 app.get('/api/leaderboard', async (req, res) => {
   try {
@@ -73,6 +76,9 @@ app.get('/api/leaderboard', async (req, res) => {
 app.get('/api/user/:address', async (req, res) => {
   try {
     const { address } = req.params;
+    if (!isValidAddress(address)) {
+      return res.json({ success: true, user: null, message: "Non-wallet user, skipping persistence" });
+    }
     const user = await createUserIfNotExists(address);
     res.json({ success: true, user });
   } catch (error) {
@@ -85,8 +91,8 @@ app.post('/api/verify-payment', async (req, res) => {
     const { txHash, userAddress, amount, type } = req.body;
 
     // 1. Basic Validation
-    if (!txHash || !userAddress) {
-      return res.status(400).json({ success: false, message: "Missing txHash or userAddress" });
+    if (!txHash || !userAddress || !isValidAddress(userAddress)) {
+      return res.status(400).json({ success: false, message: "Missing txHash or invalid userAddress" });
     }
 
     // 2. On-Chain Verification
@@ -121,6 +127,11 @@ app.post('/api/report-match', async (req, res) => {
   try {
     const { address, result } = req.body; // result: 'WIN' or 'LOSS'
     if (!address) throw new Error("Missing address");
+
+    // Only track stats for valid wallet users
+    if (!isValidAddress(address)) {
+      return res.json({ success: true, ignored: true });
+    }
 
     const isWin = result === 'WIN';
     // Award 10 XP for win, 0 for loss. Updates status to WON/LOST.
@@ -429,10 +440,15 @@ io.on("connection", (socket) => {
             console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId} (Reported by ${reporter.storedId})`);
             tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
 
-            // XP Update
-            updateUserXP(winnerStoredId, 10, true).catch(e => console.error("XP Update Failed:", e));
+            // XP Update (Only if valid address)
+            if (isValidAddress(winnerStoredId)) {
+              updateUserXP(winnerStoredId, 10, true).catch(e => console.error("XP Update Failed:", e));
+            }
+
             const loser = room.players.find(p => p.storedId !== winnerStoredId);
-            if (loser) updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+            if (loser && isValidAddress(loser.storedId)) {
+              updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+            }
 
             // Notify both players that the match is officially over
             io.to(room_id).emit("match_over", { winnerStoredId });
@@ -483,10 +499,14 @@ io.on("connection", (socket) => {
         if (finalWinnerId) {
           tournamentManager.reportMatchResult(tournamentId, matchId, finalWinnerId);
 
-          // XP Update
-          updateUserXP(finalWinnerId, 10, true).catch(e => console.error("XP Update Failed:", e));
+          // XP Update (Only if valid address)
+          if (isValidAddress(finalWinnerId)) {
+            updateUserXP(finalWinnerId, 10, true).catch(e => console.error("XP Update Failed:", e));
+          }
           const loser = room.players.find(p => p.storedId !== finalWinnerId);
-          if (loser) updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+          if (loser && isValidAddress(loser.storedId)) {
+            updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+          }
 
           // Notify both players
           io.to(room_id).emit("match_over", { winnerStoredId: finalWinnerId });
