@@ -88,28 +88,52 @@ app.get('/api/user/:address', async (req, res) => {
 
 app.post('/api/verify-payment', async (req, res) => {
   try {
-    const { txHash, userAddress, amount, type } = req.body;
+    const { txHash, userAddress, amount, type, tokenSymbol } = req.body;
+
+    console.log(`🧾 Verifying Payment: ${type} | ${amount} ${tokenSymbol} | ${txHash}`);
 
     // 1. Basic Validation
     if (!txHash || !userAddress || !isValidAddress(userAddress)) {
       return res.status(400).json({ success: false, message: "Missing txHash or invalid userAddress" });
     }
 
-    // 2. On-Chain Verification
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    // 2. POLL for Transaction Receipt (Robust Logic)
+    // We try for up to 60 seconds (30 attempts * 2s)
+    let receipt = null;
+    let attempts = 0;
+    const maxAttempts = 30;
+
+    while (!receipt && attempts < maxAttempts) {
+      try {
+        receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+      } catch (err) {
+        // Receipt not found yet, wait and retry
+        await new Promise(r => setTimeout(r, 2000));
+        attempts++;
+      }
+    }
+
+    // If still no receipt, try one last forceful wait if we have `waitForTransactionReceipt`
+    if (!receipt) {
+      try {
+        receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 5000 });
+      } catch (e) {
+        console.log("Timed out waiting for receipt.");
+      }
+    }
+
+    if (!receipt) {
+      return res.status(400).json({ success: false, message: "Transaction not found within timeout. Please wait a moment." });
+    }
 
     if (receipt.status !== 'success') {
       return res.status(400).json({ success: false, message: "Transaction failed on-chain" });
     }
 
-    // 3. Verify it was a transfer to us (Optional but recommended)
-    // We check if any log in the receipt belongs to cUSD and involves the user -> treasury
-    // This is a simplified check. For strict production, parse logs against ERC20 ABI.
+    console.log(`✅ Payment Confirmed: ${txHash}`);
 
-    // NOTE: For this implementation, we accept the success status and the fact the user sent it.
-    // In strict mode, we would verify `transfer(address,uint256)` args.
-
-    await recordPayment(txHash, userAddress, amount, type);
+    // 3. Record Payment
+    await recordPayment(txHash, userAddress, amount, type, tokenSymbol || 'cUSD');
 
     // Unlock play if it was a retry payment
     if (type === 'computer_retry') {
