@@ -70,8 +70,15 @@ let leaderboardCache = {
   TTL: 30000 // 30 seconds
 };
 
-// Helper to validate EVM address
-const isValidAddress = (addr) => typeof addr === 'string' && addr.startsWith('0x') && addr.length === 42;
+// Helper to validate wallet address (supports both Solana base58 and EVM 0x)
+const isValidAddress = (addr) => {
+    if (typeof addr !== 'string' || addr.length < 20) return false;
+    // EVM address (0x prefix, 42 chars)
+    if (addr.startsWith('0x') && addr.length === 42) return true;
+    // Solana address (base58, 32-44 chars, alphanumeric)
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return true;
+    return false;
+};
 
 // API Routes
 app.get('/api/leaderboard', async (req, res) => {
@@ -179,7 +186,7 @@ app.post('/api/report-match', async (req, res) => {
 
     const isWin = result === 'WIN';
     const today = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
-    const user = await getUser(address);
+    const user = await createUserIfNotExists(address);
     const torqueWallet = user?.solana_address || address;
     let totalPointsAwarded = 0;
 
