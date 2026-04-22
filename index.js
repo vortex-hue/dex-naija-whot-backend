@@ -44,7 +44,7 @@ const server = createServer(app);
 // Middleware
 const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',')
-    : ['https://dex-naija-whot.vercel.app', 'http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'];
+    : ['https://whot.xendex.com.ng', 'https://dex-naija-whot.vercel.app', 'http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'];
 
 app.use((req, res, next) => {
     const origin = req.headers.origin;
@@ -283,7 +283,7 @@ app.get('/api/user/:address/points', async (req, res) => {
 // Configure Socket.io for Vercel
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ["https://dex-naija-whot.vercel.app", "http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ["https://whot.xendex.com.ng", "https://dex-naija-whot.vercel.app", "http://localhost:3000", "http://127.0.0.1:3000"],
     methods: "*",
     credentials: true
   },
