@@ -8,6 +8,10 @@
 
 Backend server for WhotChain, a Solana-powered Naija Whot card game. Handles real-time multiplayer sessions, player stats, points/streak tracking, and fires custom events to **[Torque Protocol](https://torque.so)** for growth incentives.
 
+🎮 **Live App**: [https://whot.xendex.com.ng](https://whot.xendex.com.ng)
+⚙️ **Live API**: [https://api.whot.xendex.com.ng](https://api.whot.xendex.com.ng)
+💻 **Frontend Repo**: [https://github.com/vortex-hue/dex-naija-whot](https://github.com/vortex-hue/dex-naija-whot)
+
 ## ⚙️ Tech Stack
 
 - **Node.js** & **Express** — HTTP API
