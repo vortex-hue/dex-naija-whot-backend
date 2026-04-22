@@ -15,8 +15,14 @@ const {
   getLeaderboard,
   recordPayment,
   updateUserXP,
-  updateUserMatchStatus
+  updateUserMatchStatus,
+  addPoints,
+  updateStreak,
+  getWeeklyLeaderboard,
+  linkSolanaAddress
 } = require('./src/database/db');
+
+const { fireTorqueEvent } = require('./src/torque/events');
 
 const { createPublicClient, http, parseAbiItem } = require('viem');
 const { celo } = require('viem/chains');
@@ -149,7 +155,7 @@ app.post('/api/verify-payment', async (req, res) => {
 
 app.post('/api/report-match', async (req, res) => {
   try {
-    const { address, result } = req.body; // result: 'WIN' or 'LOSS'
+    const { address, result, mode } = req.body; // result: 'WIN' or 'LOSS', mode: 'solo' | 'pvp'
     if (!address) throw new Error("Missing address");
 
     // Only track stats for valid wallet users
@@ -158,10 +164,96 @@ app.post('/api/report-match', async (req, res) => {
     }
 
     const isWin = result === 'WIN';
-    // Award 10 XP for win, 0 for loss. Updates status to WON/LOST.
+    const today = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const user = await getUser(address);
+    const torqueWallet = user?.solana_address || address;
+    let totalPointsAwarded = 0;
+
+    // --- Daily Login & Streak Check ---
+    if (!user?.last_played_date || user.last_played_date !== today) {
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+      const newStreak = (user?.last_played_date === yesterday) ? (user.streak_count || 0) + 1 : 1;
+      await updateStreak(address, newStreak, today);
+
+      // Daily login bonus
+      await addPoints(address, 10);
+      totalPointsAwarded += 10;
+      fireTorqueEvent('whot_daily_login', torqueWallet, { streak: newStreak });
+
+      // Streak milestones
+      if (newStreak === 7) {
+        await addPoints(address, 100);
+        totalPointsAwarded += 100;
+        fireTorqueEvent('whot_streak_7', torqueWallet, { streak: 7 });
+        console.log(`🔥 ${address} hit 7-day streak! +100 bonus`);
+      }
+      if (newStreak === 30) {
+        await addPoints(address, 500);
+        totalPointsAwarded += 500;
+        fireTorqueEvent('whot_streak_30', torqueWallet, { streak: 30 });
+        console.log(`🔥🔥 ${address} hit 30-day streak! +500 bonus`);
+      }
+    }
+
+    // --- Points for match result ---
+    const matchPoints = isWin ? (mode === 'pvp' ? 50 : 25) : 5;
+    await addPoints(address, matchPoints);
+    totalPointsAwarded += matchPoints;
+
+    // Legacy XP update (keeps existing leaderboard compatible)
     await updateUserXP(address, isWin ? 10 : 0, isWin);
 
-    res.json({ success: true });
+    // --- Fire Torque Event ---
+    const eventName = isWin
+      ? (mode === 'pvp' ? 'whot_pvp_won' : 'whot_game_won')
+      : 'whot_game_played';
+    fireTorqueEvent(eventName, torqueWallet, { points: matchPoints, mode: mode || 'solo' });
+
+    res.json({ success: true, pointsAwarded: totalPointsAwarded });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// --- Torque Integration Endpoints ---
+
+app.post('/api/link-solana', async (req, res) => {
+  try {
+    const { address, solanaAddress } = req.body;
+    if (!address || !solanaAddress) {
+      return res.status(400).json({ success: false, message: 'Missing address or solanaAddress' });
+    }
+    await createUserIfNotExists(address);
+    await linkSolanaAddress(address, solanaAddress);
+    console.log(`🔗 Linked Solana wallet: ${address} → ${solanaAddress}`);
+    res.json({ success: true, message: 'Solana address linked' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/weekly-leaderboard', async (req, res) => {
+  try {
+    const leaderboard = await getWeeklyLeaderboard(50);
+    res.json({ success: true, leaderboard });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/user/:address/points', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const user = await getUser(address);
+    if (!user) return res.json({ success: true, points: 0, weekly_points: 0, streak_count: 0 });
+    res.json({
+      success: true,
+      points: user.points || 0,
+      weekly_points: user.weekly_points || 0,
+      streak_count: user.streak_count || 0,
+      last_played_date: user.last_played_date,
+      solana_address: user.solana_address
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -464,14 +556,23 @@ io.on("connection", (socket) => {
             console.log(`🏆 Tournament Match ${room.matchId} Won by ${winnerStoredId} (Reported by ${reporter.storedId})`);
             tournamentManager.reportMatchResult(room.tournamentId, room.matchId, winnerStoredId);
 
-            // XP Update (Only if valid address)
+            // XP & Points Update (Only if valid address)
             if (isValidAddress(winnerStoredId)) {
               updateUserXP(winnerStoredId, 10, true).catch(e => console.error("XP Update Failed:", e));
+              addPoints(winnerStoredId, 50).catch(e => console.error("Points Update Failed:", e));
+              // Fire Torque event for PvP win
+              getUser(winnerStoredId).then(u => {
+                fireTorqueEvent('whot_pvp_won', u?.solana_address || winnerStoredId, { points: 50, mode: 'pvp' });
+              }).catch(() => {});
             }
 
             const loser = room.players.find(p => p.storedId !== winnerStoredId);
             if (loser && isValidAddress(loser.storedId)) {
               updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+              addPoints(loser.storedId, 5).catch(e => console.error("Points Update Failed:", e));
+              getUser(loser.storedId).then(u => {
+                fireTorqueEvent('whot_game_played', u?.solana_address || loser.storedId, { points: 5, mode: 'pvp' });
+              }).catch(() => {});
             }
 
             // Notify both players that the match is officially over
@@ -523,13 +624,21 @@ io.on("connection", (socket) => {
         if (finalWinnerId) {
           tournamentManager.reportMatchResult(tournamentId, matchId, finalWinnerId);
 
-          // XP Update (Only if valid address)
+          // XP & Points Update (Only if valid address)
           if (isValidAddress(finalWinnerId)) {
             updateUserXP(finalWinnerId, 10, true).catch(e => console.error("XP Update Failed:", e));
+            addPoints(finalWinnerId, 50).catch(e => console.error("Points Update Failed:", e));
+            getUser(finalWinnerId).then(u => {
+              fireTorqueEvent('whot_pvp_won', u?.solana_address || finalWinnerId, { points: 50, mode: 'pvp' });
+            }).catch(() => {});
           }
           const loser = room.players.find(p => p.storedId !== finalWinnerId);
           if (loser && isValidAddress(loser.storedId)) {
             updateUserXP(loser.storedId, 0, false).catch(e => console.error("XP Update Failed:", e));
+            addPoints(loser.storedId, 5).catch(e => console.error("Points Update Failed:", e));
+            getUser(loser.storedId).then(u => {
+              fireTorqueEvent('whot_game_played', u?.solana_address || loser.storedId, { points: 5, mode: 'pvp' });
+            }).catch(() => {});
           }
 
           // Notify both players

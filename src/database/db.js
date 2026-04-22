@@ -22,9 +22,14 @@ async function initDB() {
             const userSchema = new mongoose.Schema({
                 address: { type: String, required: true, unique: true },
                 xp: { type: Number, default: 0 },
+                points: { type: Number, default: 0 },
+                weekly_points: { type: Number, default: 0 },
                 games_played: { type: Number, default: 0 },
                 wins: { type: Number, default: 0 },
-                last_match_status: { type: String, default: null }
+                last_match_status: { type: String, default: null },
+                streak_count: { type: Number, default: 0 },
+                last_played_date: { type: String, default: null },
+                solana_address: { type: String, default: null }
             });
 
             const paymentSchema = new mongoose.Schema({
@@ -61,11 +66,17 @@ async function initDB() {
             CREATE TABLE IF NOT EXISTS users (
                 address TEXT PRIMARY KEY,
                 xp INTEGER DEFAULT 0,
+                points INTEGER DEFAULT 0,
+                weekly_points INTEGER DEFAULT 0,
                 games_played INTEGER DEFAULT 0,
                 wins INTEGER DEFAULT 0,
-                last_match_status TEXT DEFAULT NULL
+                last_match_status TEXT DEFAULT NULL,
+                streak_count INTEGER DEFAULT 0,
+                last_played_date TEXT DEFAULT NULL,
+                solana_address TEXT DEFAULT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_users_xp ON users(xp DESC);
+            CREATE INDEX IF NOT EXISTS idx_users_points ON users(points DESC);
             
             CREATE TABLE IF NOT EXISTS payments (
                 tx_hash TEXT PRIMARY KEY,
@@ -76,6 +87,23 @@ async function initDB() {
             );
             CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_address);
         `);
+
+        // Migrate existing tables — add new columns if they don't exist
+        const columns = await db.all("PRAGMA table_info(users)");
+        const columnNames = columns.map(c => c.name);
+        const migrations = [
+            { name: 'points', sql: 'ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0' },
+            { name: 'weekly_points', sql: 'ALTER TABLE users ADD COLUMN weekly_points INTEGER DEFAULT 0' },
+            { name: 'streak_count', sql: 'ALTER TABLE users ADD COLUMN streak_count INTEGER DEFAULT 0' },
+            { name: 'last_played_date', sql: 'ALTER TABLE users ADD COLUMN last_played_date TEXT DEFAULT NULL' },
+            { name: 'solana_address', sql: 'ALTER TABLE users ADD COLUMN solana_address TEXT DEFAULT NULL' }
+        ];
+        for (const m of migrations) {
+            if (!columnNames.includes(m.name)) {
+                await db.exec(m.sql);
+                console.log(`  📦 Added column: ${m.name}`);
+            }
+        }
 
         console.log('✅ Connected to SQLite database (Fallback)');
         dbType = 'sqlite';
@@ -109,7 +137,10 @@ async function getDB() {
     return sqlitePool; 
 }
 
+// ========================
 // User Functions
+// ========================
+
 async function getUser(address) {
     if (!dbType) await initDB();
     if (dbType === 'mongodb') {
@@ -183,16 +214,92 @@ async function updateUserMatchStatus(address, status) {
 async function getLeaderboard(limit = 50) {
     if (!dbType) await initDB();
     if (dbType === 'mongodb') {
-        const users = await User.find({}, 'address xp wins games_played').sort({ xp: -1 }).limit(limit).lean();
+        const users = await User.find({}, 'address xp points wins games_played streak_count').sort({ points: -1 }).limit(limit).lean();
         return users;
     } else {
         const db = await getDB();
-        const res = await db.query('SELECT address, xp, wins, games_played FROM users ORDER BY xp DESC LIMIT $1', [limit]);
+        const res = await db.query('SELECT address, xp, points, wins, games_played, streak_count FROM users ORDER BY points DESC LIMIT $1', [limit]);
         return res.rows;
     }
 }
 
+// ========================
+// Points & Streak Functions
+// ========================
+
+async function addPoints(address, pointsToAdd) {
+    if (!dbType) await initDB();
+    if (dbType === 'mongodb') {
+        await User.updateOne(
+            { address },
+            { $inc: { points: pointsToAdd, weekly_points: pointsToAdd } }
+        );
+    } else {
+        const db = await getDB();
+        await db.query(
+            'UPDATE users SET points = points + $1, weekly_points = weekly_points + $2 WHERE address = $3',
+            [pointsToAdd, pointsToAdd, address]
+        );
+    }
+}
+
+async function updateStreak(address, newStreak, todayDate) {
+    if (!dbType) await initDB();
+    if (dbType === 'mongodb') {
+        await User.updateOne(
+            { address },
+            { $set: { streak_count: newStreak, last_played_date: todayDate } }
+        );
+    } else {
+        const db = await getDB();
+        await db.query(
+            'UPDATE users SET streak_count = $1, last_played_date = $2 WHERE address = $3',
+            [newStreak, todayDate, address]
+        );
+    }
+}
+
+async function resetWeeklyPoints() {
+    if (!dbType) await initDB();
+    if (dbType === 'mongodb') {
+        await User.updateMany({}, { $set: { weekly_points: 0 } });
+    } else {
+        const db = await getDB();
+        await db.query('UPDATE users SET weekly_points = 0', []);
+    }
+    console.log('🔄 Weekly points reset complete');
+}
+
+async function getWeeklyLeaderboard(limit = 50) {
+    if (!dbType) await initDB();
+    if (dbType === 'mongodb') {
+        const users = await User.find({ weekly_points: { $gt: 0 } }, 'address weekly_points solana_address streak_count')
+            .sort({ weekly_points: -1 }).limit(limit).lean();
+        return users;
+    } else {
+        const db = await getDB();
+        const res = await db.query(
+            'SELECT address, weekly_points, solana_address, streak_count FROM users WHERE weekly_points > 0 ORDER BY weekly_points DESC LIMIT $1',
+            [limit]
+        );
+        return res.rows;
+    }
+}
+
+async function linkSolanaAddress(address, solanaAddress) {
+    if (!dbType) await initDB();
+    if (dbType === 'mongodb') {
+        await User.updateOne({ address }, { $set: { solana_address: solanaAddress } });
+    } else {
+        const db = await getDB();
+        await db.query('UPDATE users SET solana_address = $1 WHERE address = $2', [solanaAddress, address]);
+    }
+}
+
+// ========================
 // Payment Functions
+// ========================
+
 async function recordPayment(txHash, userAddress, amount, type) {
     if (!dbType) await initDB();
     if (dbType === 'mongodb') {
@@ -218,5 +325,11 @@ module.exports = {
     updateUserXP,
     updateUserMatchStatus,
     getLeaderboard,
-    recordPayment
+    recordPayment,
+    // New exports for Torque integration
+    addPoints,
+    updateStreak,
+    resetWeeklyPoints,
+    getWeeklyLeaderboard,
+    linkSolanaAddress
 };
