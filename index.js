@@ -42,6 +42,20 @@ const app = express();
 const server = createServer(app);
 
 // Middleware
+const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',')
+    : ['https://dex-naija-whot.vercel.app', 'http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'];
+
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+});
 app.use(express.json()); // Enable JSON body parsing
 
 // Initialize Database
