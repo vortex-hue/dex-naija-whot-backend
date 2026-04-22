@@ -1,242 +1,198 @@
-# Dex Naija Whot - Backend Server 🎮
+# WhotChain Backend — Game Server & Torque Integration 🎮
 
 <br />
+
 ![Game play](./public/MultiplayerMockup.png)
+
 <br />
 
-This is the backend server for Dex Naija Whot, a multiplayer web-based card game. The server handles real-time multiplayer game sessions using Socket.io.
+Backend server for WhotChain, a Solana-powered Naija Whot card game. Handles real-time multiplayer sessions, player stats, points/streak tracking, and fires custom events to **[Torque Protocol](https://torque.so)** for growth incentives.
 
-🚧 **This application is still in its infancy stage and under active development.**
+## ⚙️ Tech Stack
 
-## 🌐 Live Demo
-- **Backend API**: https://dex-naija-whot-backend.onrender.com
-- **Frontend App**: https://dex-naija-whot.vercel.app
-- **Frontend Repository**: https://github.com/vortex-hue/dex-naija-whot.git
+- **Node.js** & **Express** — HTTP API
+- **Socket.io** — Real-time multiplayer game engine
+- **MongoDB** (primary) / **SQLite** (fallback) — Player data
+- **Torque Events API** — Custom event ingestion for growth leaderboards
 
-## ⚙️ Technologies 
-
-**Backend Stack:**
-- Node.js
-- Socket.io (Real-time communication)
-- Express.js (Web framework)
-- CORS (Cross-origin resource sharing)
-
-**Additional Dependencies:**
-- @honeycomb-protocol/hive-control (Solana integration)
-- @solana/web3.js (Solana blockchain interaction)
-
-## 🚀 Running the Project Locally
+## 🚀 Running Locally
 
 ### Prerequisites
-- Node.js (v18.x or higher)
-- npm or yarn package manager
+- Node.js v18+
+- MongoDB URI (or falls back to SQLite automatically)
+- Torque API keys (for event ingestion)
 
-### Installation & Setup
+### Setup
 
-1. **Clone the repository**
+1. **Clone and install**
    ```bash
    git clone https://github.com/vortex-hue/dex-naija-whot-backend.git
    cd dex-naija-whot-backend
-   ```
-
-2. **Install dependencies**
-   ```bash
    npm install
    ```
 
-3. **Start the development server**
+2. **Configure environment**
+   ```bash
+   cp .env.example .env
+   # Fill in your MongoDB URI and Torque keys
+   ```
+
+3. **Start the server**
    ```bash
    npm start
-   # or
-   node index.js
+   # Server starts on port 8080
    ```
-
-4. **Server will start on port 8080**
-   ```
-   🚀 Socket.io server starting on port 8080...
-   ```
-
-### Available Scripts
-
-- `npm start` - Start the production server
-- `npm run dev` - Start the development server (same as start)
-- `node index.js` - Direct Node.js execution
-
-## 🔧 Configuration
 
 ### Environment Variables
-The server automatically detects the environment:
-- `PORT` - Server port (default: 8080)
-- `NODE_ENV` - Environment mode
-- `VERCEL` - Vercel deployment detection
 
-### CORS Configuration
-The server is configured to accept connections from:
-- `https://dex-naija-whot.vercel.app` (Production frontend)
-- `http://localhost:3000` (Local development)
-- `http://127.0.0.1:3000` (Local development)
+| Variable | Description | Required |
+|---|---|---|
+| `PORT` | Server port | No (default: 8080) |
+| `MONGODB_URI` | MongoDB connection string | No (falls back to SQLite) |
+| `TORQUE_INGEST_API_KEY` | Torque event ingestion API key | Yes |
+| `TORQUE_API_KEY` | Torque MCP auth token | Yes |
+| `TORQUE_WHOTCHAIN_PROJECT_ID` | Torque project ID | Yes |
+| `TORQUE_EVENT_GAME_WON` | Custom event ID for game wins | Yes |
+| `TORQUE_EVENT_GAME_PLAYED` | Custom event ID for games played | Yes |
+| `TORQUE_EVENT_DAILY_LOGIN` | Custom event ID for daily logins | Yes |
+| `TORQUE_EVENT_PVP_WON` | Custom event ID for PvP wins | Yes |
+| `TORQUE_EVENT_STREAK_7` | Custom event ID for 7-day streaks | Yes |
+| `TORQUE_EVENT_STREAK_30` | Custom event ID for 30-day streaks | Yes |
+| `CORS_ORIGINS` | Comma-separated allowed origins | No |
 
-## 🐛 Debugging Commands
+## 📡 API Endpoints
 
-### Server Health Check
-```bash
-# Check if server is running
-curl https://dex-naija-whot-backend.onrender.com/
+### Health
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Server status |
+| `GET` | `/api/health` | Detailed health (rooms count) |
 
-# Check API health endpoint
-curl https://dex-naija-whot-backend.onrender.com/api/health
+### Player Management
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/leaderboard` | Top players by XP (30s cache) |
+| `GET` | `/api/user/:address` | Get user profile |
+| `GET` | `/api/user/:address/points` | Get points, weekly points, streak |
+| `POST` | `/api/report-match` | Report game result + fire Torque event |
+| `POST` | `/api/link-solana` | Link Solana address to profile |
+
+### Report Match Payload
+```json
+{
+  "address": "9KUm7YAdJEzFvghXN9dMYrBUFDc9cGPSGKH2nyvn2VvN",
+  "result": "WIN",
+  "mode": "solo"
+}
 ```
 
-### Local Testing
-```bash
-# Test Socket.io connection locally
-node -e "
-const io = require('socket.io-client');
-const socket = io('http://localhost:8080');
-socket.on('connect', () => console.log('✅ Connected to server'));
-socket.on('disconnect', () => console.log('❌ Disconnected from server'));
-"
+**Response:**
+```json
+{
+  "success": true,
+  "pointsAwarded": 35
+}
 ```
 
-### Debug Logs
-```bash
-# Run with debug logs
-DEBUG=socket.io* node index.js
+Points breakdown: 10 (daily login) + 25 (win) = 35
 
-# Check server logs on Render
-# Go to your Render dashboard > dex-naija-whot-backend > Logs
+## 🔗 Torque Integration
+
+### Event Flow
+```
+Player wins → GameOver.jsx calls POST /api/report-match
+  → Backend awards points (25 win / 5 loss / 10 daily)
+  → Backend fires Torque event via POST https://ingest.torque.so/events
+  → Torque ingests event (202 ACCEPTED)
+  → Weekly leaderboard evaluates → SOL distributed to top players
 ```
 
-### Common Issues & Solutions
+### Custom Events
 
-1. **Port already in use**
-   ```bash
-   # Find and kill process using port 8080
-   lsof -ti:8080 | xargs kill
-   ```
+| Event Name | Torque ID | Fired When |
+|---|---|---|
+| `whot_game_won` | `cmo9mc7j600swl91ixv8psgyh` | Player wins a game |
+| `whot_game_played` | `cmo9mck0p00syl91i3qscyo88` | Player loses a game |
+| `whot_daily_login` | `cmo9mckl300t0l91i7nqtxmm9` | First game of the day |
+| `whot_pvp_won` | `cmo9mcksu00t2l91i4dxvpbt6` | Player wins PvP match |
+| `whot_streak_7` | `cmo9mcl0d00t4l91iegk8xj0x` | 7 consecutive daily logins |
+| `whot_streak_30` | `cmo9mcl8k00t6l91ic5mae816` | 30 consecutive daily logins |
 
-2. **Module not found errors**
-   ```bash
-   # Clear node modules and reinstall
-   rm -rf node_modules package-lock.json
-   npm install
-   ```
+### Event Payload Format
+```json
+{
+  "userPubkey": "<solana-wallet-address>",
+  "timestamp": 1745305000000,
+  "eventName": "whot_game_won",
+  "data": {
+    "points": 25,
+    "mode": "solo"
+  }
+}
+```
 
-3. **Socket.io connection issues**
-   ```bash
-   # Check if port is accessible
-   telnet localhost 8080
-   ```
+### Incentive
+- **Weekly WhotChain Leaderboard** (ID: `cmo9q5rzq00tql91imczk47wd`)
+- Type: Leaderboard | Interval: WEEKLY | Emission: SOL
+- SQL: `SELECT userPubkey AS address, COUNT(*) AS value FROM customevent_partitioned WHERE eventId = '...' GROUP BY userPubkey ORDER BY value DESC`
+
+## 🎮 Socket.io Events
+
+### Client → Server
+| Event | Description |
+|---|---|
+| `join_room` | Join a game room |
+| `sendUpdatedState` | Send game state update |
+| `game_over` | End game session |
+| `confirmOnlineState` | Confirm player is online |
+
+### Server → Client
+| Event | Description |
+|---|---|
+| `dispatch` | Game state updates |
+| `error` | Error messages |
+| `confirmOnlineState` | Online status request |
+| `opponentOnlineStateChanged` | Opponent went online/offline |
 
 ## 📁 Project Structure
 
 ```
-whot-server/
-├── index.js                 # Main server file
-├── package.json             # Dependencies and scripts
-├── vercel.json              # Vercel deployment config
+dex-naija-whot-backend/
+├── index.js                     # Main server (Express + Socket.io + API routes)
+├── src/
+│   ├── database/
+│   │   └── db.js                # MongoDB/SQLite adapter (users, points, streaks)
+│   └── torque/
+│       └── events.js            # Torque event emitter (fire-and-forget)
 ├── utils/
 │   ├── classes/
-│   │   └── Card.js          # Card class definition
+│   │   └── Card.js              # Card class
 │   └── functions/
-│       ├── initializeDeck.js    # Game deck initialization
+│       ├── initializeDeck.js    # Deck initialization
 │       ├── randomCard.js        # Random card selection
 │       └── reverseState.js      # Game state reversal
-├── public/
-│   └── MultiplayerMockup.png    # Game mockup image
-└── README.md
+├── setup-incentive.js           # One-time script to create Torque incentive
+├── .env                         # Environment configuration
+└── package.json
 ```
 
-## 🎮 Game Features (Stable Edition)
+## 🔧 Address Validation
 
-- **Real-time Multiplayer**: Powered by Socket.io with low-latency event broadcasting.
-- **Tournament Engine**: Advanced bracket management for 2, 4, and 8-player tournaments.
-- **Authoritative Winner Resolution**: Server-side logic to resolve winner IDs and prevent client-side desyncs.
-- **Infinite Market Flow**: Coordinates with the frontend to ensure the market deck never depletes.
-- **Stability Safeguards**:
-    - **Defensive Timer Loop**: Safeguards against uninitialized room crashes.
-    - **Fair Match Start**: Timers (when enabled) start only when both players are connected.
-    - **Cleanup Logic**: Automated room disposal (default 1 hour after match completion).
-- **Online/Offline Detection**: Real-time monitoring of opponent connection states.
-- **Chat System**: Integrated real-time chat with message status tracking.
+The server accepts both **Solana** (base58, 32-44 chars) and **EVM** (0x, 42 chars) wallet addresses:
 
-## 🚀 Deployment
-
-### Render.com (Current)
-The server is deployed on Render.com with automatic deployments from the main branch.
-
-**Deployment Settings:**
-- Build Command: `npm install`
-- Start Command: `npm start`
-- Environment: Node.js
-
-### Alternative Deployments
-The server can also be deployed to:
-- Railway.app
-- Heroku
-- DigitalOcean App Platform
+```js
+const isValidAddress = (addr) => {
+    if (typeof addr !== 'string' || addr.length < 20) return false;
+    if (addr.startsWith('0x') && addr.length === 42) return true;
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return true;
+    return false;
+};
+```
 
 ## 🤝 Contributing
 
-Contributions are welcome! Here's how to contribute:
-
-1. **Fork the repository**
-2. **Create a feature branch**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. **Make your changes**
-4. **Test locally**
-   ```bash
-   npm start
-   ```
-5. **Commit your changes**
-   ```bash
-   git commit -m "Add: your feature description"
-   ```
-6. **Push to your fork**
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-7. **Create a Pull Request**
-
-### Development Guidelines
-- Follow existing code style
-- Test all Socket.io events
-- Ensure CORS policies are maintained
-- Add appropriate error handling
-
-## 📝 API Documentation
-
-### Health Endpoints
-- `GET /` - Server status check
-- `GET /api/health` - Detailed health information
-
-### Socket.io Events
-
-**Client to Server:**
-- `join_room` - Join a game room
-- `sendUpdatedState` - Send game state update
-- `game_over` - End game session
-- `confirmOnlineState` - Confirm player online status
-
-**Server to Client:**
-- `dispatch` - Game state updates
-- `error` - Error messages
-- `confirmOnlineState` - Online status requests
-- `opponentOnlineStateChanged` - Opponent status updates
-
-## 🔒 Security
-
-- CORS protection enabled
-- Input validation for room IDs
-- Player authentication via stored IDs
-- Rate limiting (inherent from hosting platform)
+Contributions are welcome! Fork the repo, create a feature branch, and submit a PR.
 
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
-
----
-
-**Note:** This project is in active development. Features and APIs may change. For the latest updates, check the [frontend repository](https://github.com/vortex-hue/dex-naija-whot.git).
+MIT License
